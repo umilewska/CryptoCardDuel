@@ -1,0 +1,10 @@
+{
+    "name": "Fire Warrior",
+    "attributes": [
+      { "trait_type": "Class", "value": "Warrior" },
+      { "trait_type": "Element", "value": "Fire" },
+      { "trait_type": "Power", "value": 7 },
+      { "trait_type": "Defense", "value": 4 },
+      { "trait_type": "Rarity", "value": "Common" }
+    ]
+  }

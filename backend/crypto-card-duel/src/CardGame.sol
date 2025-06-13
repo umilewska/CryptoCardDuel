@@ -27,13 +27,44 @@ contract CardGame is ERC721URIStorage, Ownable(msg.sender) {
 
     constructor() ERC721("BattleCard", "BCRD") {}
 
+    event StarterPackClaimed(address indexed user, bool hasClaimedStarterPack);
+
+    function tokensOfOwner(address owner) external view returns (uint256[] memory) {
+        uint256 balance = balanceOf(owner);
+        uint256[] memory tokens = new uint256[](balance);
+        uint256 found = 0;
+
+        // Replace with your actual max ID tracker (e.g., _tokenIdCounter.current())
+        uint256 maxId = 10000;
+
+        for (uint256 tokenId = 1; tokenId <= maxId && found < balance; tokenId++) {
+            try this.ownerOf(tokenId) returns (address tokenOwner) {
+                if (tokenOwner == owner) {
+                    tokens[found] = tokenId;
+                    found++;
+                }
+            } catch {
+                // tokenId doesn't exist — ignore
+            }
+        }
+
+        return tokens;
+    }
+
     function claimStarterPack() external {
-        require(!hasClaimedStarterPack[msg.sender], "Already claimed");
-        hasClaimedStarterPack[msg.sender] = true;
+        bool alreadyClaimed = hasClaimedStarterPack[msg.sender];
+        require(!alreadyClaimed, "Already claimed");
+        // require(!hasClaimedStarterPack[msg.sender], "Already claimed");
+        // hasClaimedStarterPack[msg.sender] = true;
+
+        // Emit the event to log the claim
+        emit StarterPackClaimed(msg.sender, alreadyClaimed);
 
         for (uint i = 0; i < 5; i++) {
             _mintRandomCard(msg.sender);
         }
+
+        hasClaimedStarterPack[msg.sender] = true;
     }
 
     function _mintRandomCard(address to) internal {
@@ -59,4 +90,5 @@ contract CardGame is ERC721URIStorage, Ownable(msg.sender) {
     function getCardStats(uint256 tokenId) external view returns (CardStats memory) {
         return cardStats[tokenId];
     }
+
 }

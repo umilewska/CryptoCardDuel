@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.20;
 
-import "./CardGame.sol";
+import "./CardGame.sol"; // adjust import path if needed
 
 contract BattleSimulator {
     CardGame public cardGame;
@@ -10,115 +10,130 @@ contract BattleSimulator {
         cardGame = CardGame(_cardGameAddress);
     }
 
-function battle(
-    uint256[3] calldata player1Cards,
-    uint256[3] calldata player2Cards
-) external view returns (string memory winner) {
-    uint alive1 = 3;
-    uint alive2 = 3;
-
-    uint i = 0; // indeks gracza 1
-    uint j = 0; // indeks gracza 2
-
-    uint leftHpA = 0;
-    uint leftHpB = 0;
-
-    // kopiujemy statystyki kart
-    CardGame.CardStats[3] memory team1;
-    CardGame.CardStats[3] memory team2;
-
-    for (uint k = 0; k < 3; k++) {
-        team1[k] = cardGame.getCardStats(player1Cards[k]);
-        team2[k] = cardGame.getCardStats(player2Cards[k]);
+    struct BattleCard {
+        uint8 attack;
+        uint8 defense;
+        uint8 rarityBonus;
     }
 
-    while (i < 3 && j < 3) {
-        CardGame.CardStats memory a = team1[i];
-        CardGame.CardStats memory b = team2[j];
+    // ========== PvP Support ==========
 
-        uint attackA = a.attack;
-        uint attackB = b.attack;
-        uint hpA = 0;
-        uint hpB = 0;
+    struct BattleRequest {
+        address player;
+        uint256[] cardIds;
+    }
 
-        if (leftHpA != 0){
-            hpA = leftHpA;
-        }
-        else{
-            hpA = a.defense;
-        }
-        if (leftHpB != 0){
-            hpB = leftHpB;
-        }
-        else{
-            hpB = b.defense;
-        }
+    mapping(address => BattleRequest) public pendingBattles;
+    mapping(bytes32 => bool) public resolvedBattles;
 
-        // zastosuj premie gracza 1
-        if (hasElementalAdvantage(a.element, b.element)) {
-            attackA = attackA * 2;
-        }
-        if (hasClassAdvantage(a.classType, b.classType)) {
-            attackA = attackA * 3 / 2;
-        }
+    event BattleCompleted(address indexed player1, address indexed player2, address winner);
 
-        // premie gracza 2
-        if (hasElementalAdvantage(b.element, a.element)) {
-            attackB = attackB * 2;
-        }
-        if (hasClassAdvantage(b.classType, a.classType)) {
-            attackB = attackB * 3 / 2;
-        }
+    function initiatePvPBattle(address opponent, uint256[] calldata cardIds) external {
+        require(cardIds.length == 3, "Must select exactly 3 cards");
+        require(opponent != msg.sender, "Can't battle yourself");
 
-        while (hpA > 0 && hpB > 0){
-            hpA -= attackB;
-            hpB -= attackA;
-        }
+        // Save sender's request
+        pendingBattles[msg.sender] = BattleRequest(msg.sender, cardIds);
 
-        if (hpA <= 0 && hpB > 0){
-            // ginie jednostka 1. gracza
-            i += 1;
-            alive1 -= 1;
-            leftHpA = 0;
-            leftHpB = hpB;
-        }
-        else if (hpB <= 0 && hpA > 0){
-            // ginie jednostka 2. gracza
-            i += 1;
-            alive1 -= 1;
-            leftHpB = 0;
-            leftHpA = hpA;
-        }
-        else{
-            i += 1;
-            alive1 -= 1; 
-            j += 1;
-            alive2 -= 1;
-            leftHpB = 0;
-            leftHpA = 0;
+        // If opponent already submitted
+        if (pendingBattles[opponent].player == opponent) {
+            uint256[] memory opponentCards = pendingBattles[opponent].cardIds;
+            uint256[] memory challengerCards = cardIds;
+
+            // Simulate battle
+            address winner = _simulateBattle(msg.sender, challengerCards, opponent, opponentCards);
+
+            emit BattleCompleted(msg.sender, opponent, winner);
+
+            // Mark battle as resolved
+            bytes32 battleId = keccak256(abi.encodePacked(msg.sender, opponent));
+            resolvedBattles[battleId] = true;
+
+            // Clear battle state
+            delete pendingBattles[msg.sender];
+            delete pendingBattles[opponent];
         }
     }
 
-    // określenie zwycięzcy
-    if (alive1 > alive2) return "Player 1 wins";
-    if (alive2 > alive1) return "Player 2 wins";
-    return "Draw";
-}
+    function _simulateBattle(
+        address player1,
+        uint256[] memory cards1,
+        address player2,
+        uint256[] memory cards2
+    ) internal view returns (address) {
+        BattleCard[3] memory p1;
+        BattleCard[3] memory p2;
 
+        for (uint i = 0; i < 3; i++) {
+            CardGame.CardStats memory stats1 = cardGame.getCardStats(cards1[i]);
+            CardGame.CardStats memory stats2 = cardGame.getCardStats(cards2[i]);
 
-    function hasElementalAdvantage(CardGame.Element a, CardGame.Element b) internal pure returns (bool) {
-        // Natura > Woda > Ogień > Natura
-        if (a == CardGame.Element.Nature && b == CardGame.Element.Water) return true;
-        if (a == CardGame.Element.Water && b == CardGame.Element.Fire) return true;
-        if (a == CardGame.Element.Fire && b == CardGame.Element.Nature) return true;
-        return false;
+            p1[i] = BattleCard(stats1.attack, stats1.defense, getRarityBonus(stats1.rarity));
+            p2[i] = BattleCard(stats2.attack, stats2.defense, getRarityBonus(stats2.rarity));
+        }
+
+        uint score1 = 0;
+        uint score2 = 0;
+
+        for (uint i = 0; i < 3; i++) {
+            uint power1 = p1[i].attack + p1[i].defense + p1[i].rarityBonus;
+            uint power2 = p2[i].attack + p2[i].defense + p2[i].rarityBonus;
+
+            if (power1 > power2) score1++;
+            else if (power2 > power1) score2++;
+        }
+
+        if (score1 > score2) return player1;
+        if (score2 > score1) return player2;
+        return address(0); // draw
     }
 
-    function hasClassAdvantage(CardGame.Class a, CardGame.Class b) internal pure returns (bool) {
-        // Łowca > Wojownik > Mag > Łowca
-        if (a == CardGame.Class.Hunter && b == CardGame.Class.Warrior) return true;
-        if (a == CardGame.Class.Warrior && b == CardGame.Class.Mage) return true;
-        if (a == CardGame.Class.Mage && b == CardGame.Class.Hunter) return true;
-        return false;
+    // ========== Existing Computer Battle ==========
+
+    function getRarityBonus(CardGame.Rarity rarity) internal pure returns (uint8) {
+        if (rarity == CardGame.Rarity.Common) return 1;
+        if (rarity == CardGame.Rarity.Rare) return 2;
+        if (rarity == CardGame.Rarity.Epic) return 3;
+        if (rarity == CardGame.Rarity.Legendary) return 5;
+        return 0;
+    }
+
+    function battleAgainstComputer(
+        uint256[3] calldata playerCards,
+        CardGame.CardStats[3] calldata computerCards
+    ) external view returns (string memory winner) {
+        BattleCard[3] memory user;
+        BattleCard[3] memory computer;
+
+        for (uint i = 0; i < 3; i++) {
+            require(uint8(computerCards[i].classType) <= 2, "Invalid classType");
+            require(uint8(computerCards[i].element) <= 2, "Invalid element");
+            require(uint8(computerCards[i].rarity) <= 3, "Invalid rarity");
+        }
+
+        for (uint i = 0; i < 3; i++) {
+            CardGame.CardStats memory stats = cardGame.getCardStats(playerCards[i]);
+            user[i] = BattleCard(stats.attack, stats.defense, getRarityBonus(stats.rarity));
+        }
+
+        for (uint i = 0; i < 3; i++) {
+            CardGame.CardStats memory stats = computerCards[i];
+            computer[i] = BattleCard(stats.attack, stats.defense, getRarityBonus(stats.rarity));
+        }
+
+        uint userScore = 0;
+        uint computerScore = 0;
+
+        for (uint i = 0; i < 3; i++) {
+            uint userPower = user[i].attack + user[i].defense + user[i].rarityBonus;
+            uint computerPower = computer[i].attack + computer[i].defense + computer[i].rarityBonus;
+
+            if (userPower > computerPower) userScore++;
+            else if (computerPower > userPower) computerScore++;
+        }
+
+        if (userScore > computerScore) return "Player";
+        if (computerScore > userScore) return "Computer";
+        return "Draw";
     }
 }

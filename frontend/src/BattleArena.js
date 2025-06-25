@@ -1,78 +1,122 @@
-/* global BigInt */
+import { useState, useEffect } from "react";
+import { ethers } from "ethers";
+import BattleSimulatorABI from "./BattleSimulator.json";
+import CardGameABI from "./CardGame.json";
+import { CARD_GAME_ADDRESS, BATTLE_SIMULATOR_ADDRESS } from "./contractsConfig";
 
-// src/BattleArena.js
-import React, { useState } from "react";
-// import { ethers } from "ethers";
 
-function BattleArena({ cards, battleContract, account }) {
-  const [result, setResult] = useState(null);
-  const [selectedCards, setSelectedCards] = useState([]);
+export default function BattleArena({ account }) {
+  const [status, setStatus] = useState("Idle");
+  const [battleLog, setBattleLog] = useState("");
 
-  const pickRandomCards = (allCards, n = 3) => {
-    const shuffled = [...allCards].sort(() => 0.5 - Math.random());
-    return shuffled.slice(0, n);
+  const getContracts = async () => {
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const signer = await provider.getSigner();
+    const battleContract = new ethers.Contract(BATTLE_SIMULATOR_ADDRESS, BattleSimulatorABI.abi, signer);
+    const cardGameContract = new ethers.Contract(CARD_GAME_ADDRESS, CardGameABI.abi, signer);
+    return { battleContract, cardGameContract };
   };
 
-  const startBattle = async () => {
-    if (cards.length < 3) {
-      setResult("You need at least 3 cards.");
-      return;
-    }
-
-    const selected = pickRandomCards(cards);
-    setSelectedCards(selected);
-
-    const tokenIds = selected.map(c => c.tokenId);
-    const compDeck = generateComputerDeck(); // same as before
-
+  const requestOpponent = async () => {
+    setStatus("Requesting opponent...");
+    setBattleLog("Battle requested against a random opponent!");
     try {
-      const winner = await battleContract.battleAgainstComputer(tokenIds, compDeck);
-      setResult(`Winner: ${winner}`);
+      const { battleContract, cardGameContract } = await getContracts();
+
+      const balance = await cardGameContract.balanceOf(account);
+      if (balance < 3) {
+        setStatus("You need at least 3 cards to battle.");
+        return;
+      }
+
+      const players = await cardGameContract.getAllPlayers();
+
+      // exclude 
+      const opponentPool = [];
+      for (const addr of players) {
+        if (addr.toLowerCase() === account.toLowerCase()) continue;
+        const bal = await cardGameContract.balanceOf(addr);
+        console.log(`Balance of ${addr}:`, bal.toString());
+        if (bal >= 3) opponentPool.push(addr);
+      }
+
+      if (opponentPool.length === 0) {
+        setStatus("No valid opponents with 3+ cards.");
+        return;
+      }
+
+      const tx = await battleContract.requestOpponent(opponentPool);
+      await tx.wait();
+      setStatus("Opponent requested. Waiting for result...");
     } catch (err) {
       console.error(err);
-      setResult("Battle failed.");
+      setStatus("Request failed.");
     }
   };
 
-  const generateComputerDeck = () => {
-    const ethers = require("ethers");
-    const deck = [];
-    for (let i = 0; i < 3; i++) {
-      const seed = Date.now() + Math.floor(Math.random() * 10000) + i;
-      const hash = ethers.keccak256(ethers.toUtf8Bytes(seed.toString()));
-      const rand = BigInt(hash);
-      deck.push({
-        classType: Number(rand % 3n),
-        element: Number((rand / 10n) % 3n),
-        rarity: 0, // Common
-        attack: 5 + Number(rand % 3n),
-        defense: 5 + Number((rand / 100n) % 3n),
+  useEffect(() => {
+    let battleContract;
+    let cardGameContract;
+
+    const setupListener = async () => {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+
+      battleContract = new ethers.Contract(BATTLE_SIMULATOR_ADDRESS, BattleSimulatorABI.abi, signer);
+      cardGameContract = new ethers.Contract(CARD_GAME_ADDRESS, CardGameABI.abi, signer);
+
+      battleContract.on("BattleResolved", (player1, player2, winner) => {
+        console.log("🏆 BattleResolved:", { player1, player2, winner });
+
+        if (winner === "0x0000000000000000000000000000000000000000") {
+          setStatus("🤝 It's a draw!");
+        } else if (winner.toLowerCase() === account.toLowerCase()) {
+          setStatus("🎉 You won!");
+        } else {
+          setStatus("😞 You lose.");
+        }
       });
-    }
-    return deck;
-  };
+
+      battleContract.on("RewardGiven", async (winner, tokenId) => {
+        console.log("🎁 RewardGiven:", { winner, tokenId });
+
+        if (winner.toLowerCase() === account.toLowerCase()) {
+          const stats = await cardGameContract.cardStats(tokenId);
+
+          const classTypes = ["Warrior", "Mage", "Hunter"];
+          const elements = ["Fire", "Water", "Nature"];
+          const rarities = ["Common", "Rare", "Epic", "Legendary"];
+
+          const details = `
+            🆕 You received a new card!
+            Class: ${classTypes[stats[0]]}
+            Element: ${elements[stats[1]]}
+            Rarity: ${rarities[stats[2]]}
+            Attack: ${stats[3]}
+            Defense: ${stats[4]}
+          `;
+
+          setBattleLog(details);
+        }
+      });
+    };
+
+    setupListener();
+
+    return () => {
+      if (battleContract) {
+        battleContract.removeAllListeners("BattleResolved");
+        battleContract.removeAllListeners("RewardGiven");
+      }
+    };
+  }, [account]);
 
   return (
-    <div className="battle-arena">
-      <h2>⚔️ Auto Card Battle</h2>
-      <button onClick={startBattle} disabled={cards.length < 3}>
-        🎲 Start Random Battle
-      </button>
-
-      {selectedCards.length > 0 && (
-        <div>
-          <h3>Your Randomly Selected Cards:</h3>
-          <ul>
-            {selectedCards.map((card, i) => (
-              <li key={i}>Card #{card.tokenId.toString()}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {result && <p>{result}</p>}
+    <div>
+      <h2>Battle Arena</h2>
+      <p>Status: {status}</p>
+      <button onClick={requestOpponent}>🎲 Start Random Battle</button>
+      <p>{battleLog}</p>
     </div>
   );
 }
-
-export default BattleArena;

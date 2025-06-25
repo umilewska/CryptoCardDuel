@@ -3,16 +3,13 @@ import { ethers } from "ethers";
 import "./App.css";
 import CardGameABI from "./CardGame.json";
 import BattleArena from "./BattleArena";
-import BattleSimulatorABI from "./BattleSimulator.json"; // ABI must match deployed contract
-
-
-const CARD_GAME_ADDRESS = "0x610178dA211FEF7D417bC0e6FeD39F05609AD788";
-const BATTLE_SIMULATOR_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+import BattleSimulatorABI from "./BattleSimulator.json";
+import { CARD_GAME_ADDRESS, BATTLE_SIMULATOR_ADDRESS } from "./contractsConfig";
 
 const ABI = CardGameABI.abi;
 
 const classNames = ["Warrior", "Mage", "Hunter"];
-const elementNames = ["Fire", "Water", "Nature"]; 
+const elementNames = ["Fire", "Water", "Nature"];
 const rarityNames = ["Common", "Rare", "Epic", "Legendary"];
 
 function App() {
@@ -33,65 +30,59 @@ function App() {
       try {
         // Request accounts from MetaMask
         const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+        console.log("Accounts from MetaMask:", accounts);
+
         if (accounts && accounts.length > 0) {
-          const account = accounts[0]; // Take the first account
-          setAccount(account); // Set the account
+          const account = accounts[0];
+          setAccount(account);
           console.log("Connected to account:", account);
 
-          // Now set up the contract instance
+          // set up the contract instance
           const signer = await provider.getSigner();
           const contract = new ethers.Contract(CARD_GAME_ADDRESS, ABI, signer);
-          setCardGame(contract); // Set the contract instance
+          setCardGame(contract);
         } else {
           console.error("No accounts found in MetaMask.");
         }
       } catch (error) {
         console.error("Error connecting to MetaMask:", error);
       }
-    } else {
-      alert("Please install MetaMask.");
     }
   };
 
   // inicjalizacja kontraktu po zalogowaniu
   useEffect(() => {
     const setup = async () => {
-      if (!account) {
-        console.log("Account is not connected yet.");
-        return; // Don't proceed if account is not available
-      }
+      if (!account) return;
 
-      // Proceed with contract interaction once account is available
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(CARD_GAME_ADDRESS, ABI, signer);
       const battle = new ethers.Contract(BATTLE_SIMULATOR_ADDRESS, BattleSimulatorABI.abi, signer);
-      
+
       setCardGame(contract);
       setBattleContract(battle);
 
-      // Fetch the claim status
       const alreadyClaimed = await contract.hasClaimedStarterPack(account);
       console.log("Already claimed:", alreadyClaimed); 
       setClaimed(alreadyClaimed);
 
-      // Fetch user's cards (if any)
-      const balance = await contract.balanceOf(account);
-      console.log("Balance of account:", balance.toString());
+      if (alreadyClaimed) {
+        const tokenIds = await contract.tokensOfOwner(account);
+        const userCards = [];
 
-      const tokenIds = await contract.tokensOfOwner(account);
-      const userCards = [];
+        for (const tokenId of tokenIds) {
+          const stats = await contract.getCardStats(tokenId);
+          userCards.push({ tokenId, stats });
+        }
 
-      for (const tokenId of tokenIds) {
-        const stats = await contract.getCardStats(tokenId);
-        userCards.push({ tokenId, stats });
+        setCards(userCards);
       }
-
-      setCards(userCards);
     };
 
     setup();
-  }, [account]); // Trigger the effect when account changes
+  }, [account]);
+
 
   const claimStarterPack = async () => {
     if (!cardGame || !account) return;
@@ -100,7 +91,7 @@ function App() {
       // Claim the starter pack
       const tx = await cardGame.claimStarterPack();
       console.log("Transaction sent:", tx);
-      const receipt = await tx.wait(); // Wait for the transaction to be mined
+      const receipt = await tx.wait();
       console.log("Transaction mined, receipt:", receipt);
 
       console.log("Starter pack claimed!");
@@ -113,11 +104,6 @@ function App() {
       // Fetch the user's cards
       const tokenIds = await cardGame.tokensOfOwner(account);
       const userCards = [];
-      // for (let i = 0; i < balance; i++) {
-      //   const tokenId = await cardGame.tokenOfOwnerByIndex(account, i);
-      //   const stats = await cardGame.getCardStats(tokenId);
-      //   userCards.push({ tokenId, stats });
-      // }
 
       for (const tokenId of tokenIds) {
         const stats = await cardGame.getCardStats(tokenId);
@@ -180,7 +166,7 @@ function App() {
           )}
 
           <div style={{ marginTop: "3rem", marginBottom: "4rem" }}>
-            <BattleArena cards={cards} battleContract={battleContract} account={account} />
+            <BattleArena cards={cards} battleContract={battleContract} cardGame={cardGame} account={account} />
           </div>
 
         </>
